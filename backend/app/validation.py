@@ -87,25 +87,36 @@ def validate_declaration(expected_chunks: list[dict[str, Any]]) -> list[dict[str
     if [item["sequence"] for item in ordered] != list(range(len(ordered))):
         errors.append({"code": "sequence_not_contiguous", "message": "chunk sequences must be 0..N-1"})
 
-    prev_end_offset = 0
-    for item in ordered:
-        if int(item["byte_offset"]) != prev_end_offset:
+    if ordered:
+        first = ordered[0]
+        if int(first["byte_offset"]) != 0:
             errors.append(
                 {
                     "code": "byte_range_discontinuous",
-                    "sequence": item["sequence"],
-                    "expected_offset": prev_end_offset,
-                    "actual_offset": item["byte_offset"],
+                    "sequence": first["sequence"],
+                    "expected_offset": 0,
+                    "actual_offset": first["byte_offset"],
                 }
             )
-        prev_end_offset = int(item["byte_offset"]) + int(item["byte_length"])
-
     for prev, item in zip(ordered, ordered[1:]):
-        if int(item["byte_offset"]) < int(prev["byte_offset"]) + int(prev["byte_length"]):
+        expected_offset = int(prev["byte_offset"]) + int(prev["byte_length"])
+        actual_offset = int(item["byte_offset"])
+        if actual_offset < expected_offset:
             errors.append(
                 {
                     "code": "byte_range_overlap",
                     "sequences": [prev["sequence"], item["sequence"]],
+                    "expected_offset": expected_offset,
+                    "actual_offset": actual_offset,
+                }
+            )
+        elif actual_offset > expected_offset:
+            errors.append(
+                {
+                    "code": "byte_range_discontinuous",
+                    "sequence": item["sequence"],
+                    "expected_offset": expected_offset,
+                    "actual_offset": actual_offset,
                 }
             )
 

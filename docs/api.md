@@ -87,6 +87,32 @@
 - `POST /analysis-tasks/{id}/cancel`
 - `POST /maintenance/recover-stale-tasks`
 
+`GET /analysis-tasks/{id}` 在任务字段之外返回运行轨迹，供页面判断重试是否安全：
+
+| 字段 | 含义 |
+| --- | --- |
+| `events` | 追加式轨迹：`queued/running/retry_wait/succeeded/failed/cancelled` 状态、租约获取/接管/回收、每次重试、每个阶段完成，均带时间戳 |
+| `stage_results` | 按阶段保存的结果（`fixed_snapshot/raw_inventory/raw_bytes/segmentation/spectrum`），每项含 `at` |
+| `lease_owner` / `lease_until` / `heartbeat_at` / `lease_generation` | 当前租约持有者、到期时间、最近心跳与 fencing 代际 |
+| `lease_expired` | 租约是否已过期（过期租约可被接管） |
+| `attempts` / `retry_request_count` | Worker 尝试次数 / 当前尝试已消费的手动重试次数 |
+| `error_code` / `error_message` | 最近一次失败原因 |
+| `retry_allowed` / `retry_reason` | 服务端给出的受控重试判定与理由 |
+
+受控重试的服务端规则：
+
+- `retry_wait/failed` 且当前尝试仍有未消费的重试名额（`retry_request_count < attempts`）才允许；
+- `running` 仅当租约已过期时允许（接管死 Worker），租约有效返回 409；
+- `queued/succeeded/cancelled`、已存在 `published/needs_review` 报告时一律 409；
+- 转换是带条件的单条 UPDATE（同时自增 `retry_request_count`、自增 `lease_generation`），因此并发/重复点击只有一次成功；
+- 重试沿用创建时冻结的同一份 `manifest_snapshot`、标定版本与参数，不创建新任务。
+
+Worker 侧防重边界：
+
+- 每次获取/接管租约自增 `lease_generation`；心跳续约、终态写入与失败落库都是 `WHERE lease_generation = ? AND lease_until > now` 的条件 UPDATE；
+- 旧 Worker 在租约被接管后回写影响 0 行，直接停止，不会覆盖新 Owner 状态或重复发布；
+- `reports.task_id` 唯一约束是最终防重边界，每任务至多一行报告（质量 error 时为 `diagnostic_failed`，重试成功后该行就地转为 `published`）。
+
 ### `GET /reports/{id}`
 
 报告状态：

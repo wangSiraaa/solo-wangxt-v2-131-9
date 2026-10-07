@@ -83,8 +83,12 @@ pytest -q
 ## 任务可靠性
 
 - 任务状态：`queued/running/succeeded/failed/retry_wait/cancelled`。
-- 租约字段：`lease_owner`、`lease_until`、`heartbeat_at`。
-- worker 重启后，过期租约由 `/maintenance/recover-stale-tasks` 或新 worker 条件更新接管。
+- 运行轨迹：`events` 追加记录状态转换、租约获取/接管/回收、手动重试与每个阶段完成（均带时间戳）；`stage_results` 保存各阶段结果。
+- 租约字段：`lease_owner`、`lease_until`、`heartbeat_at`、`lease_generation`（fencing 代际）。
+- 页面通过 `GET /analysis-tasks/{id}` 的 `retry_allowed/retry_reason/lease_expired` 判断是否安全重试，并展示 queued→running→retry_wait→succeeded/failed 时间线、最近心跳、租约到期、尝试次数与失败原因。
+- worker 重启后，过期租约由 `/maintenance/recover-stale-tasks`、受控重试或新 worker 条件更新接管。
+- 每次获取/接管自增 `lease_generation`；心跳续约、终态与失败落库都是 `WHERE lease_generation=? AND lease_until>now` 的条件更新，旧 worker 接管后的回写影响 0 行并立即停止。
+- 受控重试是单条条件 UPDATE（同时自增 `retry_request_count` 与 `lease_generation`），重复/并发点击只有一次成功；重试沿用同一份冻结快照、标定与参数，不创建新任务。
 - `reports.task_id` 唯一，发布前再次检查；任务重试不会替换或重复发布旧报告。
 - Celery 配置 `acks_late`、单 worker prefetch 1，并以数据库租约作为最终防重边界。
 
@@ -96,7 +100,7 @@ pytest -q
 - 8 线程并发完成同一清单；
 - 已知 3/5 次谐波的 THD、真实 RMS；
 - 平衡三相正/负/零序；
-- A 相反相接线：负序 200、零序 100、正序 100；
+- A 相反相接线：负序 200、零序 200、正序 100；
 - 标定更新后旧报告 `needs_review`；
 - 频谱任务崩溃、过期 worker 租约恢复与重试不重复发布；
 - 缺相、饱和、非整周期、采样率变化的质量状态。

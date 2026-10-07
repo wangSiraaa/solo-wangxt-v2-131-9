@@ -34,6 +34,8 @@ def post_calibration(payload: CalibrationCreate, db: Session = Depends(get_db)):
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    db.refresh(version)
     return version
 
 
@@ -120,12 +122,15 @@ def retry_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(AnalysisTask, task_id)
     if task is None:
         raise HTTPException(404, "task not found")
-    if task.status not in {"failed", "retry_wait", "running", "cancelled"}:
-        raise HTTPException(409, f"cannot retry task in status {task.status}")
-    if task.report is not None and task.report.status == "published":
-        raise HTTPException(409, "published report cannot be replaced by a retry")
-    request_retry(db, task)
+    advice = task.retry_advice()
+    if not advice["allowed"]:
+        raise HTTPException(409, f"cannot retry task in status {task.status}: {advice['reason']}")
+    try:
+        request_retry(db, task)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     db.commit()
+    db.refresh(task)
     return {"task_id": task.id, "status": task.status, "attempts": task.attempts}
 
 

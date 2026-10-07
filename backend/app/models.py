@@ -103,10 +103,22 @@ class AnalysisTask(Base):
     params: Mapped[dict] = mapped_column(JSON, nullable=False)
     manifest_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     stage_results: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Append-only task trajectory: status transitions, lease takeovers and
+    # stage completions, each with an ISO timestamp.
+    events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Fencing token: bumped on every acquisition/takeover/retry. A worker's
+    # writes are conditional on the generation it acquired, so an old worker
+    # whose lease expired can never write back after another owner takes over.
+    lease_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Manual retries consumed for the current attempt. Reset to zero whenever a
+    # new worker attempt acquires the lease. The controlled retry transition is
+    # a conditional UPDATE against attempts, so concurrent UI clicks serialize
+    # at the database and only one can succeed per failed attempt.
+    retry_request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -118,10 +130,55 @@ class AnalysisTask(Base):
     manifest: Mapped[Manifest] = relationship(back_populates="tasks")
     report: Mapped["Report | None"] = relationship(back_populates="task", uselist=False)
 
+    @staticmethod
+    def aware(value: datetime | None) -> datetime | None:
+        """DateTime columns come back naive on SQLite; normalize to UTC for comparisons."""
+        if value is None:
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+    def append_event(self, kind: str, status: str | None = None, **details) -> None:
+        event = {"at": utcnow().isoformat(), "kind": kind}
+        if status is not None:
+            event["status"] = status
+        event.update({key: value for key, value in details.items() if value is not None})
+        self.events = [*(self.events or []), event]
+
+    @property
+    def lease_expired(self) -> bool:
+        if self.lease_until is None:
+            return False
+        return self.aware(self.lease_until) <= utcnow()
+
+    def retry_advice(self) -> dict:
+        """Server-side decision the UI uses to gate the controlled retry entry."""
+        if self.report is not None and self.report.status in {"published", "needs_review"}:
+            return {
+                "allowed": False,
+                "reason": "a published report already exists; retries never replace it — create a new fixed task",
+            }
+        if self.status == "succeeded":
+            return {"allowed": False, "reason": "task already succeeded"}
+        if self.status == "cancelled":
+            return {"allowed": False, "reason": "cancelled tasks are not retried; create a new task"}
+        if self.status == "queued":
+            return {"allowed": False, "reason": "task is queued; no retry needed"}
+        # Exactly mirrors the atomic WHERE in pipeline.request_retry:
+        # one open retry slot per failed attempt, or an expired running lease.
+        if self.status == "running":
+            if self.lease_expired:
+                return {"allowed": True, "reason": "the current lease has expired and can be taken over"}
+            return {"allowed": False, "reason": "a live worker still holds the lease"}
+        if self.retry_request_count >= self.attempts:
+            return {"allowed": False, "reason": "retry already requested; waiting for the next worker attempt"}
+        if self.status in {"retry_wait", "failed"}:
+            return {"allowed": True, "reason": "the fixed snapshot will be reused on the next attempt"}
+        return {"allowed": False, "reason": f"retry is not defined for status {self.status}"}
+
 
 class Report(Base):
     __tablename__ = "reports"
-    __table_args__ = (UniqueConstraint("task_id", name="uq_report_task"))
+    __table_args__ = (UniqueConstraint("task_id", name="uq_report_task"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     task_id: Mapped[str] = mapped_column(ForeignKey("analysis_tasks.id"), nullable=False)

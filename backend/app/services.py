@@ -6,7 +6,7 @@ from datetime import timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .models import AnalysisTask, CalibrationVersion, Manifest, Report
+from .models import AnalysisTask, CalibrationVersion, Manifest, Report, utcnow
 from .validation import canonical_json
 
 
@@ -118,6 +118,14 @@ def create_analysis_task(
         params=dict(params),
         manifest_snapshot=snapshot,
         idempotency_key=idempotency_key,
+        events=[
+            {
+                "at": utcnow().isoformat(),
+                "kind": "status",
+                "status": "queued",
+                "message": "task enqueued with frozen manifest snapshot, calibration and params",
+            }
+        ],
     )
     db.add(task)
     db.flush()

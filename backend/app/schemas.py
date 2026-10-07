@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ExpectedChunkIn(BaseModel):
@@ -119,10 +119,16 @@ class TaskOut(BaseModel):
     params: dict[str, Any]
     manifest_snapshot: dict[str, Any]
     stage_results: dict[str, Any]
+    events: list[dict[str, Any]]
     attempts: int
     lease_owner: str | None
     lease_until: datetime | None
     heartbeat_at: datetime | None
+    lease_generation: int
+    retry_request_count: int
+    lease_expired: bool
+    retry_allowed: bool
+    retry_reason: str
     error_code: str | None
     error_message: str | None
     cancellation_requested: bool
@@ -132,6 +138,19 @@ class TaskOut(BaseModel):
     ended_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_trace_fields(cls, data):
+        if isinstance(data, dict):
+            return data
+        advice = data.retry_advice()
+        return {
+            **{column.name: getattr(data, column.name) for column in data.__table__.columns},
+            "lease_expired": data.lease_expired,
+            "retry_allowed": advice["allowed"],
+            "retry_reason": advice["reason"],
+        }
 
 
 class ReportOut(BaseModel):

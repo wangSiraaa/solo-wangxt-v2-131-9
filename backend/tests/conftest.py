@@ -4,9 +4,11 @@ import tempfile
 from fastapi.testclient import TestClient
 
 _TEMP_DIR = tempfile.mkdtemp(prefix="pq-test-")
+_SPOOL_DIR = os.path.join(_TEMP_DIR, "spool")
+os.makedirs(_SPOOL_DIR, exist_ok=True)
 os.environ.setdefault("PQ_DATABASE_URL", f"sqlite+pysqlite:///{os.path.join(_TEMP_DIR, 'test.db')}")
 os.environ.setdefault("PQ_OBJECT_STORE", "memory")
-os.environ.setdefault("PQ_SPOOL_DIR", os.path.join(_TEMP_DIR, "spool"))
+os.environ.setdefault("PQ_SPOOL_DIR", _SPOOL_DIR)
 
 from app.database import Base, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402

@@ -64,35 +64,57 @@
         <table>
           <thead><tr><th>任务</th><th>状态</th><th>标定</th><th>尝试</th><th>阶段</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="task in tasks" :key="task.id">
-              <td>{{ short(task.id) }}</td>
-              <td><span class="badge" :class="task.status">{{ task.status }}</span>
-                <div v-if="task.cancellation_requested" class="meta">取消请求中</div></td>
-              <td>{{ short(task.calibration_version_id) }}</td>
-              <td>{{ task.attempts }}</td>
-              <td class="meta">{{ Object.keys(task.stage_results || {}).join(' → ') }}</td>
-              <td>
-                <button @click="run(task.id)">同步执行</button>
-                <button class="secondary" @click="retry(task.id)">重试</button>
-                <button class="danger" @click="cancel(task.id)">取消</button>
-              </td>
-            </tr>
+            <template v-for="task in tasks" :key="task.id">
+              <tr>
+                <td><a href="#" class="tasklink" @click.prevent="toggleTask(task.id)">{{ short(task.id) }}</a></td>
+                <td><span class="badge" :class="task.status">{{ task.status }}</span>
+                  <div v-if="task.cancellation_requested" class="meta">取消请求中</div></td>
+                <td>{{ short(task.calibration_version_id) }}</td>
+                <td>{{ task.attempts }}</td>
+                <td class="meta">{{ Object.keys(task.stage_results || {}).join(' → ') }}</td>
+                <td>
+                  <button @click="run(task.id)" :disabled="!canRun(task)">同步执行</button>
+                  <button
+                    class="secondary"
+                    :disabled="!task.retry_allowed || busyTask === task.id"
+                    :title="task.retry_allowed ? '沿用固定快照重新入队' : task.retry_reason"
+                    @click="retry(task.id)"
+                  >受控重试</button>
+                  <button class="danger" @click="cancel(task.id)" :disabled="terminalStatuses.has(task.status)">取消</button>
+                </td>
+              </tr>
+              <tr v-if="expandedTask === task.id" class="trace-row">
+                <td colspan="6">
+                  <TaskTrace :task="task" />
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
+        <p v-if="!tasks.length" class="meta">尚无任务。</p>
 
         <h3>报告</h3>
         <template v-if="reports.length">
-          <div class="grid" style="margin-bottom:12px">
-            <div class="metric"><span>状态</span><strong><span class="badge" :class="report.status">{{ report.status }}</span></strong></div>
-            <div class="metric"><span>A 相 RMS</span><strong>{{ metric('Va')?.rms?.toFixed(4) ?? '—' }}</strong></div>
-            <div class="metric"><span>A 相 THD</span><strong>{{ metric('Va')?.thd_percent?.toFixed(3) ?? '—' }}%</strong></div>
-          </div>
-          <p class="meta" v-if="report.review_reason">{{ report.review_reason }}</p>
-          <SpectrumChart :report="report" />
-          <SequenceTable :report="report" />
-          <pre>{{ JSON.stringify(qualitySummary, null, 2) }}</pre>
+          <template v-if="report">
+            <div v-if="report.status === 'diagnostic_failed'" class="diagnostic-banner">
+              <strong>诊断结果（{{ report.status }}）— 不是已发布的正常报告</strong>
+              <p class="meta">{{ report.review_reason }}</p>
+              <pre>{{ JSON.stringify(diagnosticSummary, null, 2) }}</pre>
+            </div>
+            <template v-else>
+              <div class="grid" style="margin-bottom:12px">
+                <div class="metric"><span>状态</span><strong><span class="badge" :class="report.status">{{ report.status }}</span></strong></div>
+                <div class="metric"><span>A 相 RMS</span><strong>{{ metric('Va')?.rms?.toFixed(4) ?? '—' }}</strong></div>
+                <div class="metric"><span>A 相 THD</span><strong>{{ metric('Va')?.thd_percent?.toFixed(3) ?? '—' }}%</strong></div>
+              </div>
+              <p class="meta" v-if="report.review_reason">{{ report.review_reason }}</p>
+              <SpectrumChart :report="report" />
+              <SequenceTable :report="report" />
+              <pre>{{ JSON.stringify(qualitySummary, null, 2) }}</pre>
+            </template>
+          </template>
         </template>
-        <p v-else class="meta">尚无已发布报告。失败任务只保存阶段诊断，不会冒充完成。</p>
+        <p v-else class="meta">尚无报告。失败/中断任务只保存阶段诊断，不会冒充完成；频谱阶段崩溃时连诊断行也不会发布。</p>
       </main>
     </div>
   </div>
@@ -116,7 +138,17 @@ const tasks = ref([])
 const reports = ref([])
 const reportId = ref(null)
 const report = ref(null)
+const expandedTask = ref(null)
+const busyTask = ref(null)
 const timer = ref(null)
+
+const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled'])
+const statusOrder = ['queued', 'running', 'retry_wait', 'succeeded', 'failed']
+const statusLabels = {
+  queued: '排队', running: '运行中', retry_wait: '等待重试', succeeded: '成功', failed: '失败', cancelled: '已取消'
+}
+const canRun = (task) => ['queued', 'retry_wait'].includes(task.status)
+function toggleTask(id) { expandedTask.value = expandedTask.value === id ? null : id }
 
 const short = (value) => value ? `${String(value).slice(0, 8)}…` : '—'
 const unwrap = async (promise) => {
@@ -149,7 +181,8 @@ async function loadDetail() {
   preview.value = previewData || { segments: [] }
   tasks.value = taskList || []
   reports.value = reportList || []
-  const chosen = reports.value.find((item) => item.status === 'published') || reports.value[0]
+  const published = reports.value.find((item) => item.status === 'published')
+  const chosen = published || reports.value.find((item) => item.status === 'diagnostic_failed') || reports.value[0]
   reportId.value = chosen?.id || null
   report.value = chosen || null
   const calList = await unwrap(api.calibrations(manifest.value.channel_set_hash))
@@ -162,8 +195,21 @@ async function createTask() {
   await api.createTask(selectedId.value, selectedCalibrationId.value)
   await loadDetail()
 }
-async function run(id) { await api.runTask(id); await loadDetail() }
-async function retry(id) { await api.retryTask(id); await loadDetail() }
+async function run(id) { busyTask.value = id; try { await api.runTask(id) } finally { busyTask.value = null; await loadDetail() } }
+async function retry(id) {
+  busyTask.value = id
+  try {
+    await api.retryTask(id)
+  } catch (error) {
+    // Server is the final gate (lease expiry, published report, duplicate
+    // clicks); a 409 here means the button state was simply stale.
+    console.warn('retry rejected', error)
+    window.alert(`重试未执行：${error.message}`)
+  } finally {
+    busyTask.value = null
+    await loadDetail()
+  }
+}
 async function cancel(id) { await api.cancelTask(id); await loadDetail() }
 
 const metric = (channel) => {
@@ -179,6 +225,155 @@ const qualitySummary = computed(() => {
     snapshot_digest: report.value.snapshot_digest
   }
 })
+
+// A diagnostic_failed row must never look like a normal report: expose only
+// quality codes and messages, never the headline metrics/charts.
+const diagnosticSummary = computed(() => {
+  if (!report.value) return null
+  return {
+    report_status: report.value.status,
+    quality_status: report.value.result?.quality_status,
+    quality: report.value.result?.quality,
+    snapshot_digest: report.value.snapshot_digest,
+    note: 'diagnostic-only result; no published report exists for this task'
+  }
+})
+
+const formatTime = (value) => value ? new Date(value).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
+
+const TaskTrace = {
+  props: ['task'],
+  setup(props) {
+    // Collapse the event log into queued/running/retry_wait/succeeded/failed
+    // timeline nodes, keeping the first entry and last timestamp per status.
+    const nodes = computed(() => {
+      const byStatus = new Map()
+      for (const event of props.task.events || []) {
+        const status = event.status
+        if (!status || !statusOrder.includes(status)) continue
+        const node = byStatus.get(status) || { status, firstAt: event.at, count: 0 }
+        node.firstAt = node.firstAt || event.at
+        node.count += 1
+        byStatus.set(status, node)
+      }
+      const currentIndex = statusOrder.indexOf(props.task.status)
+      return statusOrder.map((status, index) => {
+        const node = byStatus.get(status)
+        return {
+          status,
+          label: statusLabels[status],
+          state: node ? 'reached' : (index <= currentIndex ? 'current' : 'pending'),
+          at: node?.firstAt || null,
+          count: node?.count || 0,
+          current: index === currentIndex
+        }
+      })
+    })
+
+    const stageNames = {
+      fixed_snapshot: '冻结快照',
+      raw_inventory: '原始块清单',
+      raw_bytes: '字节装载',
+      segmentation: '分段',
+      spectrum: '频谱'
+    }
+    const stageRows = computed(() =>
+      Object.entries(props.task.stage_results || {}).map(([stage, detail]) => ({
+        stage,
+        label: stageNames[stage] || stage,
+        at: detail?.at || null,
+        detail
+      }))
+    )
+
+    const takeoverEvents = computed(() =>
+      (props.task.events || []).filter((event) =>
+        ['lease_acquired', 'lease_taken', 'lease_recovered', 'retry_requested', 'cancel_requested'].includes(event.kind)
+      )
+    )
+
+    const kindLabels = {
+      status: '状态', stage: '阶段完成', lease_acquired: '租约获取', lease_taken: '租约接管',
+      lease_recovered: '租约回收', retry_requested: '手动重试', cancel_requested: '取消请求'
+    }
+
+    return { nodes, stageRows, takeoverEvents, kindLabels, formatTime, statusLabels }
+  },
+  template: `
+  <div class="trace">
+    <ol class="timeline">
+      <li v-for="node in nodes" :key="node.status" class="timeline-item" :class="node.state">
+        <span class="dot"></span>
+        <div>
+          <strong>{{ node.label }}</strong>
+          <span class="meta"> · {{ formatTime(node.at) }}<span v-if="node.count > 1"> · ×{{ node.count }}</span></span>
+        </div>
+      </li>
+    </ol>
+
+    <div class="trace-grid">
+      <div>
+        <h4>租约与心跳</h4>
+        <table class="trace-table">
+          <tbody>
+            <tr><th>尝试次数</th><td>{{ task.attempts }}</td></tr>
+            <tr><th>租约持有者</th><td>{{ task.lease_owner || '—' }}</td></tr>
+            <tr><th>租约到期</th>
+              <td>
+                {{ formatTime(task.lease_until) }}
+                <span v-if="task.status === 'running'" class="badge" :class="task.lease_expired ? 'failed' : 'succeeded'">
+                  {{ task.lease_expired ? '已过期，可接管' : '有效' }}
+                </span>
+              </td>
+            </tr>
+            <tr><th>最近心跳</th><td>{{ formatTime(task.heartbeat_at) }}</td></tr>
+          </tbody>
+        </table>
+        <ul class="event-list">
+          <li v-for="(event, i) in takeoverEvents" :key="i">
+            <span class="meta">{{ formatTime(event.at) }}</span>
+            {{ kindLabels[event.kind] || event.kind }}
+            <span class="meta" v-if="event.previous_owner">← {{ event.previous_owner }}</span>
+            <span class="meta" v-if="event.owner">→ {{ event.owner }}</span>
+          </li>
+        </ul>
+      </div>
+      <div>
+        <h4>阶段结果（固定快照口径）</h4>
+        <table class="trace-table">
+          <thead><tr><th>阶段</th><th>时间</th><th>关键结果</th></tr></thead>
+          <tbody>
+            <tr v-for="row in stageRows" :key="row.stage">
+              <td>{{ row.label }}</td>
+              <td>{{ formatTime(row.at) }}</td>
+              <td class="meta">
+                <template v-if="row.stage === 'spectrum'">
+                  质量 {{ row.detail.quality_status }} · {{ (row.detail.quality_codes || []).join(', ') || '无 issue' }}
+                </template>
+                <template v-else-if="row.stage === 'segmentation'">
+                  {{ row.detail.segments?.length || 0 }} 段
+                </template>
+                <template v-else-if="row.stage === 'raw_bytes'">{{ row.detail.bytes_loaded }} 字节</template>
+                <template v-else-if="row.stage === 'raw_inventory'">{{ row.detail.count }} 块</template>
+                <template v-else-if="row.stage === 'fixed_snapshot'">{{ String(row.detail.snapshot_digest).slice(0, 12) }}…</template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="task.error_code" class="trace-error">
+          <strong>失败原因：{{ task.error_code }}</strong>
+          <div>{{ task.error_message }}</div>
+        </div>
+        <div class="trace-retry" :class="{ blocked: !task.retry_allowed }">
+          <strong>受控重试：</strong>
+          <span :class="task.retry_allowed ? 'retry-ok' : 'meta'">
+            {{ task.retry_allowed ? '允许' : '不允许' }} — {{ task.retry_reason }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>`
+}
 
 const GapChart = {
   props: ['chunks', 'manifest', 'issues'],
