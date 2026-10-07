@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..dsp import default_params
-from ..models import AnalysisTask, CalibrationVersion, Manifest, Report
+from ..models import AnalysisTask, CalibrationVersion, Manifest, Report, TaskEvent
 from ..pipeline import execute_task, recover_stale_tasks, request_cancel, request_retry
 from ..schemas import (
     AnalysisCreate,
@@ -15,6 +15,7 @@ from ..schemas import (
     ReportOut,
     RetryOut,
     TaskOut,
+    TaskTimelineOut,
 )
 from ..services import create_analysis_task, create_calibration, get_active_calibration
 
@@ -34,6 +35,8 @@ def post_calibration(payload: CalibrationCreate, db: Session = Depends(get_db)):
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    db.refresh(version)
     return version
 
 
@@ -106,6 +109,23 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
     return task
 
 
+@router.get("/analysis-tasks/{task_id}/timeline", response_model=TaskTimelineOut)
+def get_task_timeline(task_id: str, db: Session = Depends(get_db)):
+    """Run trajectory for one task: lifecycle events plus the report, if any.
+
+    The task payload carries the operational fields the lab needs to judge
+    retry safety: stage_results, lease_owner/lease_until, heartbeat_at,
+    attempts and error_code/error_message.
+    """
+
+    task = db.get(AnalysisTask, task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    events = db.scalars(select(TaskEvent).where(TaskEvent.task_id == task_id).order_by(TaskEvent.id)).all()
+    report = db.scalar(select(Report).where(Report.task_id == task_id).limit(1))
+    return {"task": task, "events": events, "report": report}
+
+
 @router.post("/analysis-tasks/{task_id}/run", response_model=dict)
 def run_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(AnalysisTask, task_id)
@@ -120,12 +140,22 @@ def retry_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(AnalysisTask, task_id)
     if task is None:
         raise HTTPException(404, "task not found")
-    if task.status not in {"failed", "retry_wait", "running", "cancelled"}:
-        raise HTTPException(409, f"cannot retry task in status {task.status}")
-    if task.report is not None and task.report.status == "published":
-        raise HTTPException(409, "published report cannot be replaced by a retry")
-    request_retry(db, task)
+    try:
+        request_retry(db, task)
+    except ValueError as exc:
+        # 409: published report exists, or the lease is still actively held.
+        raise HTTPException(409, str(exc)) from exc
     db.commit()
+    db.refresh(task)
+    # Best-effort dispatch, same contract as task creation: in local/test mode
+    # without a broker the task stays retry_wait until /run or a worker takes
+    # it. The DB lease remains the duplicate-execution boundary.
+    try:
+        from ..celery_app import run_analysis
+
+        run_analysis.delay(task.id)
+    except Exception:
+        pass
     return {"task_id": task.id, "status": task.status, "attempts": task.attempts}
 
 

@@ -6,7 +6,7 @@ from datetime import timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .models import AnalysisTask, CalibrationVersion, Manifest, Report
+from .models import AnalysisTask, CalibrationVersion, Manifest, Report, TaskEvent
 from .validation import canonical_json
 
 
@@ -120,5 +120,20 @@ def create_analysis_task(
         idempotency_key=idempotency_key,
     )
     db.add(task)
+    db.flush()
+    # First trajectory entry; the run itself appends running/stage/terminal events.
+    db.add(
+        TaskEvent(
+            task_id=task.id,
+            event="queued",
+            status="queued",
+            detail={
+                "manifest_id": manifest.id,
+                "calibration_version_id": calibration.id,
+                "snapshot_digest": snapshot_digest(snapshot),
+                "idempotency_key": idempotency_key,
+            },
+        )
+    )
     db.flush()
     return task

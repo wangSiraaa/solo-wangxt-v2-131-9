@@ -33,6 +33,7 @@ export const api = {
   runTask: (id) => request(`/analysis-tasks/${id}/run`, { method: 'POST' }),
   cancelTask: (id) => request(`/analysis-tasks/${id}/cancel`, { method: 'POST' }),
   retryTask: (id) => request(`/analysis-tasks/${id}/retry`, { method: 'POST' }),
+  taskTimeline: (id) => request(`/analysis-tasks/${id}/timeline`),
   reports: (manifestId) => request(`/reports?manifest_id=${encodeURIComponent(manifestId)}`),
   report: (id) => request(`/reports/${id}`)
 }

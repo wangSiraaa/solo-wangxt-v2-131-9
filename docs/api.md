@@ -49,6 +49,32 @@
 
 返回分段、采样率、降采样波形和缺口/质量 issue，供 Vue/ECharts 展示。后端使用磁盘 memmap 和降采样，避免把数 GB 原始波形全部放入响应内存。
 
+## 分析任务与运行轨迹
+
+### `POST /analysis-tasks`
+
+创建即冻结清单快照、标定版本与参数。重复 `idempotency_key` 返回同一任务。
+
+### `GET /analysis-tasks/{id}`
+
+返回状态、`stage_results`、`lease_owner`/`lease_until`、`heartbeat_at`、`attempts`、`error_code`/`error_message`。
+
+### `GET /analysis-tasks/{id}/timeline`
+
+返回 `{task, events, report}`：`events` 为按提交顺序排列的轨迹（`queued/running/stage/lease_recovered/retry_wait/succeeded/failed/cancelled`），`report` 为已发布或诊断报告（无则为 `null`）。频谱阶段失败的任务只有阶段诊断与失败事件，没有报告。
+
+### `POST /analysis-tasks/{id}/retry`
+
+受控重试：仅当任务处于 `failed/retry_wait/cancelled`，或 `running` 且租约已过期时放行（单条条件更新判定），否则 409。已发布报告的任务永远 409。`retry_wait` 上重复调用幂等；重试沿用创建时冻结的快照，不产生第二份报告。
+
+### `POST /analysis-tasks/{id}/run` / `cancel`
+
+同步执行（本地/测试模式）或请求取消。执行端以 `lease_owner` 条件更新 fencing：租约被接管后，旧 worker 的阶段回写、心跳与终态提交全部被拒绝，未提交的报告插入随事务回滚。
+
+### `POST /maintenance/recover-stale-tasks`
+
+把租约过期的 `running` 任务逐条条件更新回收为 `retry_wait`，并记录 `lease_recovered` 轨迹事件。
+
 ## 标定
 
 ### `POST /calibrations`

@@ -117,11 +117,37 @@ class AnalysisTask(Base):
 
     manifest: Mapped[Manifest] = relationship(back_populates="tasks")
     report: Mapped["Report | None"] = relationship(back_populates="task", uselist=False)
+    events: Mapped[list["TaskEvent"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", order_by="TaskEvent.id"
+    )
+
+
+class TaskEvent(Base):
+    """Append-only audit trail for a task's run trajectory.
+
+    The autoincrement primary key doubles as the global insertion order, so
+    concurrent writers (retry endpoint, recovering worker, maintenance job)
+    never collide on a per-task sequence number.
+    """
+
+    __tablename__ = "task_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_tasks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    event: Mapped[str] = mapped_column(String(32), nullable=False)
+    # queued|running|stage|lease_recovered|retry_wait|succeeded|failed|cancelled|cancel_requested
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # task status after the event
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    task: Mapped[AnalysisTask] = relationship(back_populates="events")
 
 
 class Report(Base):
     __tablename__ = "reports"
-    __table_args__ = (UniqueConstraint("task_id", name="uq_report_task"))
+    __table_args__ = (UniqueConstraint("task_id", name="uq_report_task"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
     task_id: Mapped[str] = mapped_column(ForeignKey("analysis_tasks.id"), nullable=False)

@@ -80,13 +80,16 @@ pytest -q
 
 阶段结果持续写入 `stage_results`（快照、原始块清单、字节装载、分段、频谱）。频谱阶段崩溃后可诊断，但不会存在已发布报告。
 
-## 任务可靠性
+## 任务可靠性与运行轨迹
 
 - 任务状态：`queued/running/succeeded/failed/retry_wait/cancelled`。
 - 租约字段：`lease_owner`、`lease_until`、`heartbeat_at`。
-- worker 重启后，过期租约由 `/maintenance/recover-stale-tasks` 或新 worker 条件更新接管。
-- `reports.task_id` 唯一，发布前再次检查；任务重试不会替换或重复发布旧报告。
-- Celery 配置 `acks_late`、单 worker prefetch 1，并以数据库租约作为最终防重边界。
+- 每次状态迁移与阶段保存都会写入 `task_events`（自增主键即全局顺序），`GET /analysis-tasks/{id}/timeline` 返回任务、事件轨迹与报告（如有）。
+- worker 重启后，过期租约由 `/maintenance/recover-stale-tasks` 或新 worker 条件更新接管，轨迹中记录 `lease_recovered`。
+- 所有 worker 回写（阶段结果、心跳、失败/终态转换、报告发布）都按 `lease_owner` 条件更新 fencing：租约被接管后，旧 worker 的回写全部拒绝，待提交的报告插入随事务回滚。
+- 受控重试：`POST /analysis-tasks/{id}/retry` 仅在 `failed/retry_wait/cancelled` 或租约已过期的 `running` 状态下放行（条件更新），否则 409；`retry_wait` 上重复调用幂等。
+- `reports.task_id` 唯一，发布前再次检查；重复点击重试、worker 重复执行最多发布一份报告。
+- Celery 配置 `acks_late`、单 worker prefetch 1、不启用结果后端（结果落库），并以数据库租约作为最终防重边界。
 
 ## 合成验收
 
@@ -96,7 +99,7 @@ pytest -q
 - 8 线程并发完成同一清单；
 - 已知 3/5 次谐波的 THD、真实 RMS；
 - 平衡三相正/负/零序；
-- A 相反相接线：负序 200、零序 100、正序 100；
+- A 相反相接线：负序 200、零序 200、正序 100；
 - 标定更新后旧报告 `needs_review`；
-- 频谱任务崩溃、过期 worker 租约恢复与重试不重复发布；
+- 频谱任务崩溃、过期 worker 租约接管与旧 worker 回写拒绝、重复重试不重复发布；
 - 缺相、饱和、非整周期、采样率变化的质量状态。

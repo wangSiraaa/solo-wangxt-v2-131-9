@@ -128,3 +128,12 @@ def create_and_run_task(client, manifest_id, calibration_id):
     response = client.post(f"/analysis-tasks/{task['id']}/run")
     assert response.status_code == 200, response.text
     return task["id"]
+
+
+def completed_recording(client, sample_chunks=(300, 420)):
+    chunks = make_chunks(sample_chunks=sample_chunks)
+    manifest = create_manifest(client, chunks)
+    upload_chunks(client, manifest["id"], chunks, order=[1, 0])
+    client.post(f"/manifests/{manifest['id']}/finalize")
+    calibration = make_calibration(client, manifest["channel_set_hash"])
+    return manifest, calibration

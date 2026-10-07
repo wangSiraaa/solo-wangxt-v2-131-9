@@ -155,4 +155,20 @@ class RetryOut(BaseModel):
     attempts: int
 
 
+class TaskEventOut(BaseModel):
+    id: int
+    event: str
+    status: str
+    detail: dict[str, Any]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TaskTimelineOut(BaseModel):
+    task: TaskOut
+    events: list[TaskEventOut]
+    report: ReportOut | None
+
+
 QualitySeverity = Literal["ok", "warning", "error"]

@@ -5,16 +5,15 @@ from fastapi.testclient import TestClient
 from app.database import SessionLocal
 from app.models import AnalysisTask, Report, utcnow
 from app.pipeline import execute_task
-from tests.synthetic import CHANNELS, create_and_run_task, create_manifest, make_calibration, make_chunks, upload_chunks
-
-
-def completed_recording(client):
-    chunks = make_chunks(sample_chunks=(300, 420))
-    manifest = create_manifest(client, chunks)
-    upload_chunks(client, manifest["id"], chunks, order=[1, 0])
-    client.post(f"/manifests/{manifest['id']}/finalize")
-    calibration = make_calibration(client, manifest["channel_set_hash"])
-    return manifest, calibration
+from tests.synthetic import (
+    CHANNELS,
+    completed_recording,
+    create_and_run_task,
+    create_manifest,
+    make_calibration,
+    make_chunks,
+    upload_chunks,
+)
 
 
 def test_task_fixes_manifest_calibration_and_params_and_publishes_once(client: TestClient):

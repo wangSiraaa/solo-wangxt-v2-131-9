@@ -87,6 +87,15 @@ def validate_declaration(expected_chunks: list[dict[str, Any]]) -> list[dict[str
     if [item["sequence"] for item in ordered] != list(range(len(ordered))):
         errors.append({"code": "sequence_not_contiguous", "message": "chunk sequences must be 0..N-1"})
 
+    for prev, item in zip(ordered, ordered[1:]):
+        if int(item["byte_offset"]) < int(prev["byte_offset"]) + int(prev["byte_length"]):
+            errors.append(
+                {
+                    "code": "byte_range_overlap",
+                    "sequences": [prev["sequence"], item["sequence"]],
+                }
+            )
+
     prev_end_offset = 0
     for item in ordered:
         if int(item["byte_offset"]) != prev_end_offset:
@@ -99,15 +108,6 @@ def validate_declaration(expected_chunks: list[dict[str, Any]]) -> list[dict[str
                 }
             )
         prev_end_offset = int(item["byte_offset"]) + int(item["byte_length"])
-
-    for prev, item in zip(ordered, ordered[1:]):
-        if int(item["byte_offset"]) < int(prev["byte_offset"]) + int(prev["byte_length"]):
-            errors.append(
-                {
-                    "code": "byte_range_overlap",
-                    "sequences": [prev["sequence"], item["sequence"]],
-                }
-            )
 
     for item in ordered:
         try:

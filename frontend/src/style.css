@@ -54,4 +54,21 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .chart { height: 280px; margin-top: 12px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { border-bottom: 1px solid #e5ebf3; padding: 7px; text-align: left; }
+tr.active td { background: #eef7ff; }
 pre { white-space: pre-wrap; max-height: 260px; overflow: auto; background: #0f172a; color: #dbeafe; padding: 12px; border-radius: 8px; }
+.timeline-panel { margin-top: 14px; border: 1px solid #dce4ef; border-radius: 10px; padding: 12px 14px; background: #fbfdff; }
+.timeline-panel h4 { margin: 0 0 6px; }
+.timeline { list-style: none; margin: 10px 0 4px; padding: 0 0 0 14px; border-left: 2px solid #d7e3f2; }
+.timeline li { position: relative; padding: 0 0 12px 14px; }
+.timeline li .dot {
+  position: absolute; left: -21px; top: 4px; width: 10px; height: 10px;
+  border-radius: 50%; background: #94a9c9; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #94a9c9;
+}
+.timeline li.running .dot, .timeline li.queued .dot { background: #1769aa; box-shadow: 0 0 0 1px #1769aa; }
+.timeline li.retry_wait .dot { background: #e99b1c; box-shadow: 0 0 0 1px #e99b1c; }
+.timeline li.succeeded .dot { background: #1c9b61; box-shadow: 0 0 0 1px #1c9b61; }
+.timeline li.failed .dot, .timeline li.cancelled .dot { background: #d8274f; box-shadow: 0 0 0 1px #d8274f; }
+.timeline li.stage .dot { background: #b7c6da; box-shadow: 0 0 0 1px #b7c6da; }
+.badge.cancelled { background: #e2e8f0; color: #475569; }
+.badge.diagnostic_failed { background: #ffe0e6; color: #a01636; }
